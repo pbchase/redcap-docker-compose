@@ -42,7 +42,7 @@ public function __construct() {
     try {
 
         // INITIALIZE DB FROM ENV PARAMS
-        $this->hostname = 'db';
+        $this->hostname = empty($_ENV['MYSQL_HOSTNAME']) ? 'db' : $_ENV['MYSQL_HOSTNAME'];
         $this->db = empty($_ENV['MYSQL_DATABASE']) ? FALSE : $_ENV['MYSQL_DATABASE'];
         $this->username = empty($_ENV['MYSQL_USER']) ? FALSE : $_ENV['MYSQL_USER'];
         $this->password = empty($_ENV['MYSQL_PASSWORD']) ? FALSE : $_ENV['MYSQL_PASSWORD'];
@@ -116,36 +116,32 @@ public function __construct() {
                     // SETUP DATABASE
                     if (! $this->initializeDatabase()) throw new RuntimeException("Unable to initialize Database.  Proceed with manual database setup.");
 
-                    // TEST IF DATABASE IS ALREADY SET UP
+                    // TEST IF DATABASE IS ALREADY SET UP AND CREATE IT IF NOT
                     $q = $this->db_query("SHOW TABLES LIKE 'redcap%'");
                     $redcap_tables = mysqli_num_rows($q);
-                    if ($redcap_tables > 0) throw new RuntimeException("There are $redcap_tables existing tables" .
-                        " starting with 'redcap' in their name in the " . $this->db . " database." .
-                        " This script will halt automatic table creation of a new REDCap database.<br><br>" .
-                        " If you wish to delete the existing database and start new, you need to remove the docker volume" .
-                        " that contains the database files.  The name of this volumne will contain <strong>" .
-                        $_ENV['MYSQL_DIR'] . "</strong> and can be found by executing this command on your terminal:" .
-                        " <code>docker volume ls</code>.  You can then remove the volume with <code>docker volume rm" .
-                        " XXX</code> where XXX is the name of the volume <i>e.g. rdc_mysql-volume</i>");
+                    if ($redcap_tables > 0) {
+                        $this->successes[] = "REDCap database tables exist at " . $this->hostname . ":" . $this->db . " Skipping database setup.";
+                        $redcap_tables == 0;
+                    } else {
+                        // GET THE INSTALL SQL
+                        $install_url_internal = $this->redcap_webroot_url_internal . "install.php";
+                        $install_url = $this->redcap_webroot_url . "install.php";
+                        $sql = file_get_contents($install_url_internal . "?sql=1");
+                        if (empty($sql)) throw new RuntimeException("Unable to obtain installation SQL from $install_url_internal which is exposed to you as $install_url");
 
-                    // GET THE INSTALL SQL
-                    $install_url_internal = $this->redcap_webroot_url_internal . "install.php";
-                    $install_url = $this->redcap_webroot_url . "install.php";
-                    $sql = file_get_contents($install_url_internal . "?sql=1");
-                    if (empty($sql)) throw new RuntimeException("Unable to obtain installation SQL from $install_url_internal which is exposed to you as $install_url");
+                        // RUN THE INSTALL SQL
+                        $commands = 0;
+                        if (mysqli_multi_query($this->db_conn, $sql)) do {
+                            // Nothing needed here
+                            $commands++;
+                        } while (mysqli_more_results($this->db_conn) && mysqli_next_result($this->db_conn));
+                        $this->successes[] = "Install SQL Script Completed $commands queries";
 
-                    // RUN THE INSTALL SQL
-                    $commands = 0;
-                    if (mysqli_multi_query($this->db_conn, $sql)) do {
-				        // Nothing needed here
-                        $commands++;
-			        } while (mysqli_more_results($this->db_conn) && mysqli_next_result($this->db_conn));
-                    $this->successes[] = "Install SQL Script Completed $commands queries";
-
-                    // TEST IF WE NOW HAVE TABLES
-                    $q = $this->db_query("SHOW TABLES LIKE 'redcap%'");
-                    $redcap_tables = mysqli_num_rows($q);
-                    if ($redcap_tables == 0) throw new RuntimeException("Install SQL did not appear to work.  Check database and do manual setup.");
+                        // TEST IF WE NOW HAVE TABLES
+                        $q = $this->db_query("SHOW TABLES LIKE 'redcap%'");
+                        $redcap_tables = mysqli_num_rows($q);
+                        if ($redcap_tables == 0) throw new RuntimeException("Install SQL did not appear to work.  Check database and do manual setup.");
+                    }
 
                     // Set the REDCap Base URL to circumvent errors in install.php step 3 when the port
                     // is not the default for the protocol
